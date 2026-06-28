@@ -6,11 +6,11 @@
 # Usage: packaging/install.sh
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
-PY="$REPO/.venv/bin/python"
+REPO="${TINK_AGENT_REPO:-$(cd "$(dirname "$0")/.." && pwd -P)}"
+PY="${TINK_AGENT_PYTHON:-$REPO/.venv/bin/python}"
 
 if [ ! -x "$PY" ]; then
-  echo "error: venv not found at $PY — run: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
+  echo "error: python not found at $PY — run: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
   exit 1
 fi
 

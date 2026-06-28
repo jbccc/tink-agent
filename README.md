@@ -185,7 +185,21 @@ The app also includes onboarding checks for this flow. If you want the hardware
 details, device schema, pitch-modulation notes, and firmware caveats, read
 [TING.md](TING.md).
 
-## Setup
+## Install with Homebrew
+
+```bash
+brew tap tajchert/tap
+brew install tink-agent
+tink-agent-install
+```
+
+This installs tink-agent and starts the LaunchAgent. Remove the LaunchAgent with:
+
+```bash
+tink-agent-uninstall
+```
+
+## Setup from source
 
 ```bash
 python3 -m venv .venv

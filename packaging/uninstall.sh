@@ -3,8 +3,8 @@
 # Usage: packaging/uninstall.sh
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/.." && pwd -P)"
-PY="$REPO/.venv/bin/python"
+REPO="${TINK_AGENT_REPO:-$(cd "$(dirname "$0")/.." && pwd -P)}"
+PY="${TINK_AGENT_PYTHON:-$REPO/.venv/bin/python}"
 
 "$PY" - <<'PYEOF'
 from tink_agent import launchagent
