@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.claude/
+.pytest_cache/
+.superpowers/
+build/
+dist/
+*.egg-info/
+.DS_Store
+scratchpad/
+*.wav.tmp
