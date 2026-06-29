@@ -76,6 +76,11 @@ Example mappings:
   <img src="assets/readme-buttons.png" alt="Customize the buttons: three Ting buttons map to up to eight action slots" width="100%">
 </p>
 
+## Inspiration
+
+Kudos to [Robert Bye](https://x.com/RobertJBye/status/2069455413028983007) -
+his X post inspired this project.
+
 ## What you need
 
 - **macOS** - tink-agent is a menu-bar app and installs as a LaunchAgent.
