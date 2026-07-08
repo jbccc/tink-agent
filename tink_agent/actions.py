@@ -131,3 +131,18 @@ class ActionRouter:
 
     def _do_type(self, text: str) -> None:
         self.kb.type(text)
+
+    # --- held-key output (external dictation via push-to-talk) --------------
+    def press_hold(self, key_name: str) -> None:
+        """Press and HOLD a key (no release) on the main thread. Used to hold an
+        external dictation app's push-to-talk key while voice is active."""
+        self._dispatch(lambda: self._run(self._key_action, ("press", key_name)))
+
+    def release(self, key_name: str) -> None:
+        """Release a key previously held with press_hold()."""
+        self._dispatch(lambda: self._run(self._key_action, ("release", key_name)))
+
+    def _key_action(self, args) -> None:
+        kind, key_name = args
+        key = getattr(self.kb.Key, key_name, None) or key_name
+        (self.kb.press if kind == "press" else self.kb.release)(key)

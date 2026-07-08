@@ -80,7 +80,9 @@ def device_name_from_title(title: str) -> str | None:
 
 class AudioCapture:
     def __init__(self, device_name, sample_rate, block_size, on_block,
-                 stream_factory=None, resolve_fn=None, on_status=None):
+                 stream_factory=None, resolve_fn=None, on_status=None,
+                 capture_rate=0, capture_channels=1,
+                 input_channel=0):
         self.device_name = device_name
         self.sample_rate = sample_rate
         self.block_size = block_size
@@ -89,6 +91,13 @@ class AudioCapture:
         self._stream_factory = stream_factory
         self._on_status = on_status or _default_on_status
         self._stream = None
+        # Multichannel/resample path (e.g. an Aggregate Device): open the device
+        # at capture_rate with capture_channels, take input_channel, decimate to
+        # sample_rate. capture_rate 0 = the simple mono sample_rate path.
+        self._capture_rate = int(capture_rate) or self.sample_rate
+        self._capture_channels = max(1, int(capture_channels))
+        self._input_channel = int(input_channel)
+        self._decim = max(1, round(self._capture_rate / self.sample_rate))
 
     def _make_stream(self, device_index):
         if self._stream_factory is not None:
@@ -96,8 +105,12 @@ class AudioCapture:
         else:
             import sounddevice as sd
             factory = sd.InputStream
-        return factory(device=device_index, channels=1, samplerate=self.sample_rate,
-                       blocksize=self.block_size, dtype="int16", callback=self._callback)
+        # Open block_size at the CAPTURE rate so that after decimation we emit
+        # ~block_size samples at sample_rate to the detector/VAD.
+        return factory(device=device_index, channels=self._capture_channels,
+                       samplerate=self._capture_rate,
+                       blocksize=self.block_size * self._decim,
+                       dtype="int16", callback=self._callback)
 
     def _callback(self, indata, frames, time_info, status):
         if status:
@@ -106,7 +119,16 @@ class AudioCapture:
                 self._on_status(str(status))
             except Exception:  # noqa: BLE001 — logging must never break capture
                 pass
-        self.on_block(np.asarray(indata, dtype=np.int16).reshape(-1))
+        data = np.asarray(indata, dtype=np.int16)
+        if data.ndim == 2 and data.shape[1] > 1:
+            ch = min(self._input_channel, data.shape[1] - 1)
+            mono = data[:, ch]
+        else:
+            mono = data.reshape(-1)
+        if self._decim > 1:
+            mono = mono[::self._decim]
+        block = np.ascontiguousarray(mono, dtype=np.int16)
+        self.on_block(block)
 
     def start(self):
         idx = self._resolve(self.device_name)

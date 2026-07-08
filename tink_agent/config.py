@@ -12,6 +12,15 @@ class Config:
     device_name: str = "USB Audio Device"
     sample_rate: int = 16000
     block_size: int = 800  # 50 ms at 16 kHz
+    # For an input device whose native rate/layout differs from the detector's
+    # 16 kHz mono (e.g. a macOS Aggregate Device wrapping the USB adapter, which
+    # runs at 48 kHz), capture opens the device at capture_rate with
+    # capture_channels, extracts input_channel, and downsamples to sample_rate.
+    # Defaults keep the simple single-channel 16 kHz path (capture_rate=0 ->
+    # use sample_rate, 1 channel, channel 0).
+    capture_rate: int = 0          # 0 = same as sample_rate (no resample)
+    capture_channels: int = 1      # channels to open on the device
+    input_channel: int = 0         # which captured channel is the mic
     tones: dict = field(default_factory=lambda: {
         1: 1500, 2: 2300, 3: 3100, 4: 3900,      # mode A (orange pos 0)
         5: 2751, 6: 4218, 7: 5685, 8: 7153,      # mode B (orange pos 1, pitch +10.5)
@@ -32,6 +41,11 @@ class Config:
     stt_backend: str = "macwhisper"
     stt_command: list = field(default_factory=list)  # custom: tokens with {file}
     stt_output: str = "last_line"  # custom: last_line | all | file | dir
+    # Aqua Voice "Avalon" cloud API (OpenAI-Whisper-compatible). Used when
+    # stt_backend == "aqua-api". The API key is read from the AQUA_API_KEY env
+    # var, never stored here. stt_model overrides the model name if set.
+    aqua_api_url: str = "https://api.aquavoice.com/api/v1/audio/transcriptions"
+    aqua_model: str = "avalon-v1.5"
     slot_actions: dict = field(default_factory=lambda: {
         1: "enter", 2: "escape", 3: "ctrl_c", 4: "shift_tab",   # mode A
         5: "up", 6: "down", 7: "noop", 8: "noop",               # mode B (7,8 reserved)
@@ -41,7 +55,12 @@ class Config:
     # "com.apple.Terminal"). Empty list = act in any app.
     target_apps: list = field(default_factory=list)
     target_app: str = ""  # legacy single value; migrated into target_apps on load
+    # "type"            -> transcribe the utterance and type the text (built-in STT).
+    # "dictation_hotkey" -> don't transcribe; hold `dictation_hotkey` down while voice
+    #   is active and release on silence, so an external dictation app (e.g. Aqua
+    #   Voice, bound to push-to-talk on that key) does the speech-to-text instead.
     output_mode: str = "type"
+    dictation_hotkey: str = "f15"  # pynput Key name held during voice in dictation mode
     enabled: bool = True
     start_at_login: bool = False
     # First-run onboarding ("Set up TINK") completed at least once.

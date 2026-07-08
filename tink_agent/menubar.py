@@ -7,7 +7,7 @@ import rumps
 from .config import Config, DEFAULT_PATH
 from .audio import AudioCapture, DeviceNotFound, reinitialize as audio_reinitialize
 from .detector import ToneDetector, VoiceGate
-from .transcribe import Transcriber, resolve_stt
+from .transcribe import Transcriber, resolve_stt, aqua_config
 from .actions import ActionRouter
 from .engine import Engine
 from .activity_log import ActivityLogger, DEFAULT_LOG
@@ -87,7 +87,8 @@ class TinkAgentApp(rumps.App):
 
     def _make_transcriber(self) -> Transcriber:
         cmd, mode = resolve_stt(self.config)
-        return Transcriber(cmd, mode)
+        aqua_url, aqua_model = aqua_config(self.config)
+        return Transcriber(cmd, mode, aqua_url=aqua_url, aqua_model=aqua_model)
 
     @property
     def log_path(self):
@@ -274,7 +275,10 @@ class TinkAgentApp(rumps.App):
             self.capture = AudioCapture(
                 self.config.device_name, self.config.sample_rate,
                 self.config.block_size, on_block=self.engine.handle_block,
-                on_status=self._on_audio_status)
+                on_status=self._on_audio_status,
+                capture_rate=getattr(self.config, "capture_rate", 0),
+                capture_channels=getattr(self.config, "capture_channels", 1),
+                input_channel=getattr(self.config, "input_channel", 0))
             self.capture.start()
             self._status = "listening"
         except DeviceNotFound:
@@ -288,6 +292,8 @@ class TinkAgentApp(rumps.App):
         if self.capture:
             self.capture.stop()
             self.capture = None
+        # Release a held dictation PTT key so it can't get stuck down.
+        self.engine._sync_dictation_key(False)
         self._status = "stopped"
 
     def open_config(self, _):
