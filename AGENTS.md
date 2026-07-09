@@ -102,8 +102,12 @@ Key properties of this flow — **do not break these**:
 - Speech can't fire a button: tone detection requires **both** strong single-frequency
   *dominance* AND high *tonality* (the winning bin must hold most of the block's total
   energy). Pure tones score ~1.0 tonality; speech ~0.0. Measured, not guessed.
-- Tones can't pollute transcripts: `tone_active` blocks are dropped from the voice
-  buffer, and short tone-edge blips fall under `min_utterance_ms` and are discarded.
+- Tones can't pollute transcripts **or trigger dictation**: a `tone_active` block can't
+  even *open* the voice gate (the rise condition requires `rms_start` AND `not tone_active`),
+  so button presses never start an utterance. This matters in `dictation_hotkey` mode, where
+  an opened gate presses the external push-to-talk key — without this guard, pressing a
+  button would spuriously trigger dictation. Tone-edge blips that slip through fall under
+  `min_utterance_ms` and are discarded.
 
 ---
 
@@ -122,6 +126,7 @@ Each file has one responsibility. Sizes are small on purpose — keep them that 
 | `activity_log.py` | Optional TSV activity log | `ActivityLogger` |
 | `launchagent.py` | macOS auto-start (LaunchAgent) | `set_run_at_login`, `install_and_start`, `uninstall` |
 | `menubar.py` | rumps app, lifecycle, shared setters | `TinkAgentApp`, `rescan_devices`, `main` |
+| `toast.py` | Brief top-right "live" toast on startup: borderless, click-through, fade in/hold/fade out | `show_live` |
 | `theme.py` | Native-leaning AppKit theme: warm window, NSBox grouped cards, `NSSwitch`/`NSPopUpButton` row builders, accent/link buttons, onboarding step row; registers bundled Archivo from `assets/fonts/`. Targets retained in a module list (native controls reject attrs) | `window`, `card`, `switch_row`, `popup_row`, `accent_button`, `StepRow`, palette |
 | `settings_ui.py` | Native AppKit Settings window, themed via `theme` (incl. Audio source dropdown + Refresh) | `SettingsController` |
 | `setup_checks.py` | Pure-logic checks behind onboarding (perms, TINGDISK, copy) | `mic_status`, `copy_device_config`, `files_match` |
@@ -193,8 +198,10 @@ mw_binary="/Applications/MacWhisper.app/Contents/MacOS/mw"
 `VoiceGate(rms_start, rms_end, hangover_ms, min_utterance_ms, sample_rate, block_size,
 max_utterance_ms=30000)`
 - `process(block, tone_active) -> utterance(np.int16)|None`. Energy VAD with hysteresis:
-  rise above `rms_start` → open; below `rms_end` for `hangover_ms` → close & return PCM.
-- Blocks with `tone_active=True` are **excluded** from the buffer (mutual exclusion).
+  rise above `rms_start` **while `not tone_active`** → open; below `rms_end` for
+  `hangover_ms` → close & return PCM.
+- Blocks with `tone_active=True` never open the gate and are **excluded** from the buffer
+  (full mutual exclusion — a tone can neither start nor feed an utterance).
 - Buffer is **capped** at `max_utterance_ms` (force-flush) so a long hold can't grow
   memory unbounded or stall the `np.concatenate` in `_close()`.
 - `active` property → utterance currently open (drives the capture indicator).
@@ -239,14 +246,16 @@ submit_fn=None, frontmost_fn=None, logger=None)`. The heart is `handle_block` (s
 ### 4.7 `menubar.py` — app shell & lifecycle
 
 `TinkAgentApp(rumps.App)` owns everything. Menu is intentionally slim: status line,
-**Enabled** toggle, **Settings…**, Quit (rumps adds Quit). Everything else is in the
-Settings window.
+**Enabled** toggle, **Settings…**, **Set up TINK…**, Quit (rumps adds Quit). Everything
+else is in the Settings window.
 
 - `_build_engine()` constructs the full chain + `ActivityLogger`.
 - `_tick(self, _)` (rumps.Timer, 0.2 s, main thread): lazily starts audio on first tick
   (deferred so `run()` paints the icon before opening the mic — see §8), swaps the icon
   (`ICON_IDLE`/`ICON_ACTIVE`) by capture state, updates the status line, and refreshes
-  the Settings window if open.
+  the Settings window if open. On that first tick it also shows a brief top-right **"live"
+  toast** (`toast.show_live`, `_show_live_toast`). Onboarding is **not** auto-shown — the
+  "Set up TINK…" menu item is the only way in, so the setup window never pops up unbidden.
 - **Shared setters** are the single place state changes (called by BOTH the menu and the
   settings window, so they stay in sync): `set_enabled`, `set_listening`,
   `set_start_at_login`, `toggle_target`, `set_log_activity`. Each applies + persists.

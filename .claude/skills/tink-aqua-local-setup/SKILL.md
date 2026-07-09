@@ -72,15 +72,26 @@ c.capture_rate     = 48000                 # aggregate native rate
 c.capture_channels = 1                     # USB-only aggregate = 1 input channel
 c.input_channel    = 0                     # Ting is on channel 0
 c.forward_audio_to = ""                    # not used
+c.vad_hangover_ms  = 3000                  # pause tolerance: silence this long ends the
+                                           # utterance & releases F12. Higher = won't cut
+                                           # you off mid-sentence but Aqua types later.
 c.save()
 print("tink-agent configured for local Aqua dictation")
 PY
 ```
 
-Restart tink-agent:
+Restart tink-agent so it reloads the config (and re-scans audio devices):
 ```bash
+tinkctl restart          # if the tinkctl helper is installed (see below)
+# or, without it:
 launchctl kickstart -k gui/$(id -u)/io.github.tajchert.tinkagent
 ```
+
+> **`tinkctl`** (`~/.local/bin/tinkctl`) wraps start/stop/restart/status/log and always
+> re-enumerates audio devices — the fix for "no audio after the USB adapter dropped out of
+> the Aggregate Device." A companion `tink-device-watch` LaunchAgent auto-restarts the app
+> whenever the audio-device set changes, so a Ting replug self-heals. Both are machine-local
+> (not in this repo); see the app's operational notes if they're missing.
 
 ## Step 3 — Point Aqua at the aggregate + set F12 push-to-talk
 
@@ -129,9 +140,16 @@ type your words**. Tap the Ting buttons — they should still fire Enter/Escape/
 - **Aggregate reads silence / a pinned huge constant level** → BlackHole or another virtual
   device got added to the aggregate. Remove it — aggregate should contain ONLY the USB
   device.
-- **Everything silent after reboot** → the aggregate persists, but give tink-agent a
-  restart (`launchctl kickstart -k gui/$(id -u)/io.github.tajchert.tinkagent`) and make
-  sure the Ting is powered on with the adapter connected.
+- **Everything silent after reboot / replug** → the aggregate persists, but the USB
+  adapter can drop out of it when its device ID shifts. Reattach it in Audio MIDI Setup and
+  restart tink-agent (`tinkctl restart`, or `launchctl kickstart -k
+  gui/$(id -u)/io.github.tajchert.tinkagent`). The `tink-device-watch` agent, if installed,
+  does this restart automatically on any device-set change. Make sure the Ting is powered
+  on with the adapter connected and the handle engaged.
+- **A button press triggers dictation (F12) instead of firing its action** → should not
+  happen: a detected tone can't open the voice gate. If it does, the tone isn't being
+  detected as a tone (check purity/levels while pressing the button — see the handle/pitch
+  gotcha in `TING.md`), so it leaks into the voice path.
 
 ## Switching back to the paid API (if ever needed)
 

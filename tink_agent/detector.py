@@ -120,11 +120,14 @@ class VoiceGate:
         block = np.asarray(block).reshape(-1)
         rms = float(np.sqrt(np.mean(block.astype(np.float64) ** 2))) if block.size else 0.0
         if not self._active:
-            if rms >= self.rms_start:
+            # A tone (button press) must NOT open the voice gate. Tones are loud
+            # enough to clear rms_start, and in dictation_hotkey mode an opened
+            # gate presses the PTT key — so a button press would spuriously
+            # trigger dictation. Require real (non-tone) voice energy to start.
+            if rms >= self.rms_start and not tone_active:
                 self._active = True
                 self._silence = 0
-                if not tone_active:
-                    self._buf.append(block.astype(np.int16))
+                self._buf.append(block.astype(np.int16))
             return None
         # active
         if not tone_active and rms >= self.rms_end:

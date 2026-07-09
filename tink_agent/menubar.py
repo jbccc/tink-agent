@@ -61,6 +61,7 @@ class TinkAgentApp(rumps.App):
             None,
             self.enabled_item,
             rumps.MenuItem("Settings…", callback=self.open_settings),
+            rumps.MenuItem("Set up TINK…", callback=self.open_onboarding),
             None,
         ]
 
@@ -120,9 +121,10 @@ class TinkAgentApp(rumps.App):
         if not self._autostart_done:
             self._autostart_done = True
             self.start_listening(None)
-        if not self.config.onboarding_done and not self._onboarding_shown:
-            self._onboarding_shown = True
-            self.open_onboarding(None)
+            # Tiny top-right "live" toast instead of the intrusive onboarding
+            # window. Onboarding stays reachable from the menu (Settings/help),
+            # but never auto-pops.
+            self._show_live_toast()
         capturing = self.capture is not None and self.engine.is_capturing
         if capturing != self._icon_active:
             self._icon_active = capturing
@@ -256,6 +258,14 @@ class TinkAgentApp(rumps.App):
             from .button_actions import ButtonActionsController
             self._button_actions = ButtonActionsController.alloc().initWithApp_(self)
         self._button_actions.show()
+
+    def _show_live_toast(self):
+        """Tiny top-right 'live' confirmation on startup. Cosmetic — never fatal."""
+        try:
+            from . import toast
+            toast.show_live(ICON_IDLE)
+        except Exception:  # noqa: BLE001
+            pass
 
     def open_onboarding(self, _=None):
         if self._onboarding is None:
