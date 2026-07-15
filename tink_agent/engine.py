@@ -1,5 +1,9 @@
 from __future__ import annotations
+import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+from .transcribe import write_wav
 
 
 class Engine:
@@ -63,6 +67,8 @@ class Engine:
             self._submit(lambda u=utterance: self._handle_utterance(u))
 
     def _handle_utterance(self, utterance):
+        if getattr(self.config, "save_utterances", False):
+            self._save_utterance(utterance)
         text = self.transcriber.transcribe(utterance, self.config.sample_rate)
         if not text:
             if self.transcriber.last_error:
@@ -78,6 +84,28 @@ class Engine:
         self._on_event("transcript", text)
         if self.logger:
             self.logger.transcript(text, front)
+
+    def _save_utterance(self, utterance):
+        """Write the captured utterance to a WAV so the user can play it back and
+        hear exactly what the mic recorded. Best-effort: never break capture."""
+        try:
+            d = (self.config.utterances_dir
+                 or str(Path.home() / "Library" / "Logs" / "TinkAgent-utterances"))
+            d = Path(d)
+            d.mkdir(parents=True, exist_ok=True)
+            # Timestamped, second-resolution + block count so filenames sort by
+            # recency and the newest is obviously "the last thing I said".
+            stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+            path = d / f"utt-{stamp}.wav"
+            # If two utterances land in the same second, disambiguate.
+            n = 1
+            while path.exists():
+                n += 1
+                path = d / f"utt-{stamp}-{n}.wav"
+            write_wav(utterance, path, self.config.sample_rate)
+            self._on_event("saved", str(path))
+        except Exception as e:  # noqa: BLE001 — saving is a convenience, not critical
+            self._on_event("error", f"save utterance failed: {e}")
 
 
 def _default_frontmost() -> str:

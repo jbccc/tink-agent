@@ -7,7 +7,7 @@ import rumps
 from .config import Config, DEFAULT_PATH
 from .audio import AudioCapture, DeviceNotFound, reinitialize as audio_reinitialize
 from .detector import ToneDetector, VoiceGate
-from .transcribe import Transcriber, resolve_stt
+from .transcribe import Transcriber, resolve_stt, aqua_config
 from .actions import ActionRouter
 from .engine import Engine
 from .activity_log import ActivityLogger, DEFAULT_LOG
@@ -61,6 +61,7 @@ class TinkAgentApp(rumps.App):
             None,
             self.enabled_item,
             rumps.MenuItem("Settings…", callback=self.open_settings),
+            rumps.MenuItem("Set up TINK…", callback=self.open_onboarding),
             None,
         ]
 
@@ -87,7 +88,8 @@ class TinkAgentApp(rumps.App):
 
     def _make_transcriber(self) -> Transcriber:
         cmd, mode = resolve_stt(self.config)
-        return Transcriber(cmd, mode)
+        aqua_url, aqua_model = aqua_config(self.config)
+        return Transcriber(cmd, mode, aqua_url=aqua_url, aqua_model=aqua_model)
 
     @property
     def log_path(self):
@@ -119,9 +121,8 @@ class TinkAgentApp(rumps.App):
         if not self._autostart_done:
             self._autostart_done = True
             self.start_listening(None)
-        if not self.config.onboarding_done and not self._onboarding_shown:
-            self._onboarding_shown = True
-            self.open_onboarding(None)
+        # Onboarding never auto-pops; it's reachable from the "Set up TINK…" menu
+        # item. (Auto-popping on every launch was annoying.)
         capturing = self.capture is not None and self.engine.is_capturing
         if capturing != self._icon_active:
             self._icon_active = capturing
@@ -274,7 +275,10 @@ class TinkAgentApp(rumps.App):
             self.capture = AudioCapture(
                 self.config.device_name, self.config.sample_rate,
                 self.config.block_size, on_block=self.engine.handle_block,
-                on_status=self._on_audio_status)
+                on_status=self._on_audio_status,
+                capture_rate=getattr(self.config, "capture_rate", 0),
+                capture_channels=getattr(self.config, "capture_channels", 1),
+                input_channel=getattr(self.config, "input_channel", 0))
             self.capture.start()
             self._status = "listening"
         except DeviceNotFound:

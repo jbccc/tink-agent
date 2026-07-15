@@ -12,6 +12,14 @@ class Config:
     device_name: str = "USB Audio Device"
     sample_rate: int = 16000
     block_size: int = 800  # 50 ms at 16 kHz
+    # Many USB ADCs run natively at 48 kHz; forcing the stream open at 16 kHz
+    # makes CoreAudio resample in real time, which on cheap adapters mangles the
+    # audio (bursty delivery, chopped speech). Instead open the device at
+    # capture_rate and decimate to sample_rate in software. capture_rate=0 keeps
+    # the simple single-rate path (open directly at sample_rate).
+    capture_rate: int = 0          # 0 = same as sample_rate (no resample)
+    capture_channels: int = 1      # channels to open on the device
+    input_channel: int = 0         # which captured channel is the mic
     tones: dict = field(default_factory=lambda: {
         1: 1500, 2: 2300, 3: 3100, 4: 3900,      # mode A (orange pos 0)
         5: 2751, 6: 4218, 7: 5685, 8: 7153,      # mode B (orange pos 1, pitch +10.5)
@@ -32,6 +40,10 @@ class Config:
     stt_backend: str = "macwhisper"
     stt_command: list = field(default_factory=list)  # custom: tokens with {file}
     stt_output: str = "last_line"  # custom: last_line | all | file | dir
+    # Aqua Voice API (backend "aqua-api"): OpenAI-Whisper-compatible endpoint.
+    # The API key is read from the AQUA_API_KEY environment variable, never stored.
+    aqua_api_url: str = "https://api.aquavoice.com/api/v1/audio/transcriptions"
+    aqua_model: str = "avalon-v1.5"
     slot_actions: dict = field(default_factory=lambda: {
         1: "enter", 2: "escape", 3: "ctrl_c", 4: "shift_tab",   # mode A
         5: "up", 6: "down", 7: "noop", 8: "noop",               # mode B (7,8 reserved)
@@ -49,6 +61,10 @@ class Config:
     # Activity log: transcripts, target app, and actions written to a TSV file.
     log_activity: bool = False
     log_path: str = ""  # empty -> ~/Library/Logs/TinkAgent-activity.log
+    # Save each captured utterance as a WAV so you can hear what the mic recorded
+    # (diagnose "transcript cut off": was it the audio or the STT?).
+    save_utterances: bool = False
+    utterances_dir: str = ""  # empty -> ~/Library/Logs/TinkAgent-utterances
 
     def to_dict(self) -> dict:
         d = asdict(self)
