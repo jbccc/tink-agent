@@ -48,6 +48,11 @@ class Config:
         1: "enter", 2: "escape", 3: "ctrl_c", 4: "shift_tab",   # mode A
         5: "up", 6: "down", 7: "noop", 8: "noop",               # mode B (7,8 reserved)
     })
+    # Push-to-talk: the Ting button (slot number) that arms one dictation
+    # utterance. When set, speech is ONLY transcribed after this button is
+    # pressed — ambient conversation is ignored. None = always-on voice activation
+    # (the button just... doesn't exist and every voice opens the gate).
+    ptt_slot: int | None = None
     # When non-empty, keystrokes/typing only fire if the frontmost app's name or
     # bundle id matches one of these entries (substrings, e.g. bundle ids like
     # "com.apple.Terminal"). Empty list = act in any app.

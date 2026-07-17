@@ -16,6 +16,12 @@ class Engine:
         self.router = router
         self.logger = logger
         self.enabled = config.enabled
+        # Push-to-talk gate. When ptt_slot is set, the VoiceGate stays shut until
+        # that button is pressed (which arms one utterance); it disarms as soon as
+        # the utterance closes. This stops ambient room speech from being
+        # transcribed — nothing is typed unless you press the talk button first.
+        self.ptt_slot = getattr(config, "ptt_slot", None)
+        self._armed = False
         self._on_event = on_event or (lambda kind, payload: None)
         # Optional safety guard: when config.target_app is set, actions/typing
         # only fire if the frontmost app's name or bundle id contains it.
@@ -51,25 +57,53 @@ class Engine:
             return
         slot = self.detector.process(block)
         if slot is not None:
-            front = self._front()
-            if self._target_ok(front):
-                action = self.router.fire_slot(slot)
-                self._on_event("tone", slot)
-                self._on_event("action", action)
-                if self.logger:
-                    self.logger.action(slot, action, front)
+            # The talk button arms one utterance instead of firing an action.
+            if self.ptt_slot is not None and slot == self.ptt_slot:
+                self._armed = True
+                self._on_event("armed", slot)
             else:
-                self._on_event("blocked", slot)
-                if self.logger:
-                    self.logger.blocked(f"slot{slot}", front)
+                front = self._front()
+                if self._target_ok(front):
+                    action = self.router.fire_slot(slot)
+                    self._on_event("tone", slot)
+                    self._on_event("action", action)
+                    if self.logger:
+                        self.logger.action(slot, action, front)
+                else:
+                    self._on_event("blocked", slot)
+                    if self.logger:
+                        self.logger.blocked(f"slot{slot}", front)
+        # Push-to-talk: when a talk button is configured, only feed the VoiceGate
+        # while armed. The gate is fed silence-equivalent (skipped) otherwise, so
+        # ambient speech never opens an utterance. Disarm when the utterance closes.
+        if self.ptt_slot is not None and not self._armed:
+            return
         utterance = self.voicegate.process(block, self.detector.tone_active)
         if utterance is not None:
+            self._armed = False
             self._submit(lambda u=utterance: self._handle_utterance(u))
 
     def _handle_utterance(self, utterance):
+        # Trace every utterance close: length + peak/RMS level. Makes "why did it
+        # transcribe?" visible in the run log (dead-air closes vs real speech).
+        try:
+            import numpy as _np, sys as _sys
+            u = _np.asarray(utterance, dtype=_np.float64)
+            rms = float(_np.sqrt((u * u).mean())) if u.size else 0.0
+            peak = float(_np.abs(u).max()) if u.size else 0.0
+            print(f"[engine] utterance closed: {u.size} samples "
+                  f"= {u.size/self.config.sample_rate:.2f}s  rms={rms:.0f} peak={peak:.0f}",
+                  file=_sys.stderr, flush=True)
+        except Exception:  # noqa: BLE001
+            pass
         if getattr(self.config, "save_utterances", False):
             self._save_utterance(utterance)
         text = self.transcriber.transcribe(utterance, self.config.sample_rate)
+        try:
+            import sys as _sys
+            print(f"[engine] transcript => {text!r}", file=_sys.stderr, flush=True)
+        except Exception:  # noqa: BLE001
+            pass
         if not text:
             if self.transcriber.last_error:
                 self._on_event("error", self.transcriber.last_error)

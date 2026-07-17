@@ -9,7 +9,7 @@ from .audio import AudioCapture, DeviceNotFound, reinitialize as audio_reinitial
 from .detector import ToneDetector, VoiceGate
 from .transcribe import Transcriber, resolve_stt, aqua_config
 from .actions import ActionRouter
-from .engine import Engine
+from .engine import Engine, _default_frontmost
 from .activity_log import ActivityLogger, DEFAULT_LOG
 from . import launchagent
 
@@ -68,6 +68,13 @@ class TinkAgentApp(rumps.App):
         # Start audio AFTER the run loop is up (opening the mic can block/prompt;
         # doing it in __init__ would delay run() and the status item appearing).
         self._autostart_done = False
+        # Sleep/wake auto-recovery: the USB adapter sleeps and drops off the bus.
+        # The audio callback (PortAudio thread) flags the drop here; the main-thread
+        # _tick does the stop + throttled retry. On retry, AudioCapture.start()
+        # re-enumerates and refuses anything but the USB device — so recovery never
+        # falls through to the built-in mic; it rebinds USB on wake or stays stopped.
+        self._device_lost = False
+        self._retry_at = 0.0
         self._timer = rumps.Timer(self._tick, 0.2)
         self._timer.start()
 
@@ -80,7 +87,8 @@ class TinkAgentApp(rumps.App):
                        c.min_utterance_ms, c.sample_rate, c.block_size,
                        c.max_utterance_ms)
         tr = self._make_transcriber()
-        router = ActionRouter(c.slot_actions, dispatch=_main_thread_dispatch)
+        router = ActionRouter(c.slot_actions, dispatch=_main_thread_dispatch,
+                              frontmost_fn=_default_frontmost)
         self.activity_log = ActivityLogger(
             enabled=c.log_activity, path=(c.log_path or None))
         return Engine(c, det, vg, tr, router, on_event=self._on_event,
@@ -110,17 +118,52 @@ class TinkAgentApp(rumps.App):
 
     def _on_audio_status(self, status):
         # Audio callback thread: PortAudio reported input overflow / a device
-        # drop (which truncates speech). Only stash + write to the run log here;
-        # never touch AppKit off the main thread.
+        # drop (which truncates speech). Only stash a flag + write to the run log
+        # here; never touch AppKit or stop the stream off the main thread.
         import sys
         print(f"[audio] stream status: {status}", file=sys.stderr, flush=True)
         self._status = f"audio glitch: {str(status)[:24]}"
+        # An input-overflow blip is transient; a device drop (sleep/unplug) makes
+        # the stream stop delivering. sounddevice flags input errors here — treat
+        # anything beyond plain overflow as a possible drop and let _tick verify.
+        text = str(status).lower()
+        if "overflow" not in text or "error" in text:
+            self._device_lost = True
 
     # --- main-thread rendering ---
     def _tick(self, _):
         if not self._autostart_done:
             self._autostart_done = True
+            self._retry_at = time.monotonic() + 2.0  # let this start settle first
             self.start_listening(None)
+        # Sleep/wake auto-recovery. Two ways the USB adapter drop shows up:
+        #  - the callback flagged _device_lost (PortAudio reported an input error)
+        #  - the stream object silently died (is_running went False under us)
+        # In either case, tear down the dead stream and retry on a throttle. The
+        # retry goes through start_listening -> AudioCapture.start(), whose guard
+        # rebinds ONLY the USB device (never the built-in mic) or raises, leaving
+        # us stopped. We keep retrying so it self-heals when the adapter wakes.
+        # We WANT a live capture whenever enabled and autostart has run. If we
+        # don't have one (never started, died, dropped, or a prior start() was
+        # refused because the adapter was asleep), keep retrying on a throttle so
+        # it self-heals the moment the USB adapter wakes back onto the bus.
+        want_capture = self.engine.enabled and self._autostart_done
+        have_live = self.capture is not None and self.capture.is_running
+        # The USB adapter drops WITHOUT PortAudio flipping is_running or firing a
+        # status callback — the stream just stops delivering blocks. So a "live"
+        # stream whose heartbeat has gone stale (no blocks for >3s) is actually a
+        # silent-dropped device; treat it as not-live so we rebind. 3s tolerates
+        # normal handle-released silence (blocks still arrive, just quiet) — only a
+        # true device drop stops blocks entirely.
+        stale = have_live and self.capture.blocks_stale_for() > 3.0
+        if want_capture and (not have_live or stale or self._device_lost):
+            now = time.monotonic()
+            if now >= self._retry_at:
+                self._retry_at = now + 2.0  # don't hammer PortAudio re-init
+                if self.capture is not None:
+                    self.stop_listening(None)
+                self._device_lost = False
+                self.start_listening(None)  # rebinds USB on wake, else stays stopped
         # Onboarding never auto-pops; it's reachable from the "Set up TINK…" menu
         # item. (Auto-popping on every launch was annoying.)
         capturing = self.capture is not None and self.engine.is_capturing
@@ -284,9 +327,13 @@ class TinkAgentApp(rumps.App):
         except DeviceNotFound:
             self.capture = None
             self._status = "error: mic not found"
+            print("[menubar] start_listening: device not found", file=sys.stderr, flush=True)
         except Exception as e:  # noqa: BLE001
             self.capture = None
             self._status = f"error: {str(e)[:30]}"
+            import traceback
+            print("[menubar] start_listening FAILED:", file=sys.stderr, flush=True)
+            traceback.print_exc()
 
     def stop_listening(self, _):
         if self.capture:

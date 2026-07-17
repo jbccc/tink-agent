@@ -1,5 +1,6 @@
 from __future__ import annotations
 import sys
+import time
 import numpy as np
 
 
@@ -112,6 +113,12 @@ class AudioCapture:
                        dtype="int16", callback=self._callback)
 
     def _callback(self, indata, frames, time_info, status):
+        # Heartbeat: stamp every delivered block. When the USB adapter drops,
+        # PortAudio often does NOT flip is_running or fire a status callback — the
+        # stream just goes silent forever. A stale heartbeat is the ONLY reliable,
+        # notification-independent signal that the device vanished, so the menubar
+        # can rebind. Cheap monotonic read; safe from the audio thread.
+        self.last_block_at = time.monotonic()
         if status:
             # input overflow / device error — report but still forward the block
             try:
@@ -130,9 +137,44 @@ class AudioCapture:
         self.on_block(block)
 
     def start(self):
+        # The USB adapter sleeps and drops off the bus; on wake, PortAudio
+        # RENUMBERS its (cached) device list. A stale index can silently point at
+        # the built-in MacBook mic — so we must (1) re-enumerate to clear the
+        # cache, (2) resolve by name, and (3) HARD-VERIFY the bound device's real
+        # name matches what we asked for. Never fall through to the wrong mic:
+        # capturing room noise off the built-in mic is worse than not capturing.
+        try:
+            reinitialize()  # clear PortAudio's cached device list (sleep/wake churn)
+        except Exception:  # noqa: BLE001 — a failed re-init must not block start
+            pass
         idx = self._resolve(self.device_name)
+        bound = None
+        try:
+            import sounddevice as sd
+            bound = sd.query_devices(idx)["name"]
+        except Exception:  # noqa: BLE001
+            pass
+        # Guard: the resolved index must actually BE the device we want. If the
+        # adapter is asleep/absent, resolve_device already raises DeviceNotFound;
+        # this catches the subtler case where churn made the index point elsewhere.
+        if bound is not None and self.device_name.lower() not in bound.lower():
+            raise DeviceNotFound(
+                f"idx {idx} is {bound!r}, not {self.device_name!r} "
+                f"(refusing to capture the wrong mic)")
+        print(f"[audio] bound input device idx={idx} name={bound!r} "
+              f"(wanted {self.device_name!r})", file=sys.stderr, flush=True)
+        # Seed the heartbeat so a just-opened stream isn't flagged stale before
+        # its first block arrives.
+        self.last_block_at = time.monotonic()
         self._stream = self._make_stream(idx)
         self._stream.start()
+
+    def blocks_stale_for(self) -> float:
+        """Seconds since the last block was delivered (0 if never started). A
+        large value on a supposedly-running stream means the device dropped
+        silently — PortAudio didn't tell us, the blocks just stopped."""
+        last = getattr(self, "last_block_at", 0.0)
+        return 0.0 if not last else max(0.0, time.monotonic() - last)
 
     def stop(self):
         if self._stream is not None:
